@@ -1,5 +1,5 @@
 # Bot tokeniňizi şu ýere goýuň
-TOKEN = "8421128459:AAHr3bwBziXiUCuwbbm223dI-f2jEaL-dOk"
+TOKEN = "7950309639:AAEDGFIHcx4YJ8-KFzSq9sqGYyAYpFsTk4o"
 
 from telebot import TeleBot
 from typing import List
@@ -11,7 +11,7 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 bot = TeleBot(8421128459:AAHr3bwBziXiUCuwbbm223dI-f2jEaL-dOk)
 
 # Admin ID-leri: sanlaryň toplumydyr
-ADMINS = {7896190704}
+ADMINS = {7279061074}
 
 # Konfigurasiýa
 REF_BONUS = 2.0                # referal bonusy (⭐)
