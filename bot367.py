@@ -16,7 +16,7 @@ REF_BONUS = 2.0
 DAILY_BONUS = 1.0
 CLICK_COOLDOWN_MIN = 10
 CLICK_REWARD_DEFAULT = 0.1
-LOG_CHANNEL_ID = -1002672668104  # Kanal ID (isteğe bağlı, yoksa 0 yapın)
+LOG_CHANNEL_ID = 0  # Log kanalı kullanmak istemiyorsanız 0 yapın
 
 DB_PATH = "stars.db"
 
@@ -50,6 +50,12 @@ class BalanceFSM(StatesGroup):
 
 class ClickSetFSM(StatesGroup):
     reward = State()
+
+class AdminAddFSM(StatesGroup):
+    uid = State()
+
+class AdminRemoveFSM(StatesGroup):
+    uid = State()
 
 # ======= BOT VE DİSPATCHER =======
 bot = Bot(token=TOKEN)
@@ -171,6 +177,19 @@ async def admins_all() -> list:
 
 async def is_admin(uid: int) -> bool:
     return uid in await admins_all()
+
+async def add_admin(uid: int):
+    cur = set(await admins_all())
+    cur.add(uid)
+    with open("admins.json", "w") as f:
+        json.dump(list(cur), f)
+
+async def remove_admin(uid: int):
+    cur = set(await admins_all())
+    if uid in cur:
+        cur.remove(uid)
+        with open("admins.json", "w") as f:
+            json.dump(list(cur), f)
 
 async def ensure_user(uid: int, ref_by: int = None):
     async with aiosqlite.connect(DB_PATH) as con:
@@ -337,20 +356,28 @@ async def verify_join(callback: CallbackQuery):
 
 @dp.callback_query(lambda c: c.data == "profile")
 async def cb_profile(callback: CallbackQuery):
-    bal = await get_balance(callback.from_user.id)
-    async with aiosqlite.connect(DB_PATH) as con:
-        cur = await con.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE user_id=? AND status='approved'", (callback.from_user.id,))
-        wd_total = float((await cur.fetchone())[0])
-        cur = await con.execute("SELECT invited_cnt FROM users WHERE id=?", (callback.from_user.id,))
-        invited = (await cur.fetchone())[0]
-        bot_user = await bot.get_me()
-        ref_link = f"https://t.me/{bot_user.username}?start={callback.from_user.id}"
-        text = (f"👤 *Profil* 👤\n\n"
-                f"⭐ *Balans:* `{fmt_stars(bal)}`\n"
-                f"💸 *Jemi Çykarylan:* `{fmt_stars(wd_total)}`\n"
-                f"👥 *Çagyrylan Dostlar:* `{invited}`\n"
-                f"🔗 *Referal Link:* {ref_link}")
-        await callback.message.edit_text(text, reply_markup=back_menu(), parse_mode="Markdown")
+    try:
+        bal = await get_balance(callback.from_user.id)
+        async with aiosqlite.connect(DB_PATH) as con:
+            cur = await con.execute("SELECT COALESCE(SUM(amount),0) FROM withdrawals WHERE user_id=? AND status='approved'", (callback.from_user.id,))
+            wd_total = float((await cur.fetchone())[0])
+            cur = await con.execute("SELECT invited_cnt FROM users WHERE id=?", (callback.from_user.id,))
+            invited_row = await cur.fetchone()
+            invited = invited_row[0] if invited_row else 0
+            bot_user = await bot.get_me()
+            ref_link = f"https://t.me/{bot_user.username}?start={callback.from_user.id}"
+            text = (f"👤 *Profil* 👤\n\n"
+                    f"⭐ *Balans:* `{fmt_stars(bal)}`\n"
+                    f"💸 *Jemi Çykarylan:* `{fmt_stars(wd_total)}`\n"
+                    f"👥 *Çagyrylan Dostlar:* `{invited}`\n"
+                    f"🔗 *Referal Link:* {ref_link}")
+            await callback.message.edit_text(text, reply_markup=back_menu(), parse_mode="Markdown")
+    except Exception as e:
+        print(f"Profil hatası: {e}")
+        await callback.message.edit_text(
+            "❌ Profil yüklenirken bir hata oluştu. Lütfen daha sonra tekrar deneyin.",
+            reply_markup=back_menu()
+        )
 
 @dp.callback_query(lambda c: c.data == "earn")
 async def cb_earn(callback: CallbackQuery):
@@ -915,10 +942,10 @@ async def back_home(callback: CallbackQuery):
 async def a_add_admin(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return
-    await state.set_state(BalanceFSM.uid)  # Reuse state
+    await state.set_state(AdminAddFSM.uid)
     await callback.message.edit_text("👑 Admin olarak eklemek istediğiniz kullanıcının ID'sini girin:", reply_markup=admin_kb())
 
-@dp.message(BalanceFSM.uid)
+@dp.message(AdminAddFSM.uid)
 async def a_add_admin_val(message: Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
         return
@@ -935,10 +962,10 @@ async def a_add_admin_val(message: Message, state: FSMContext):
 async def a_del_admin(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return
-    await state.set_state(BalanceFSM.amount)  # Reuse state
+    await state.set_state(AdminRemoveFSM.uid)
     await callback.message.edit_text("🚫 Admin olarak çıkarmak istediğiniz kullanıcının ID'sini girin:", reply_markup=admin_kb())
 
-@dp.message(BalanceFSM.amount)
+@dp.message(AdminRemoveFSM.uid)
 async def a_del_admin_val(message: Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
         return
