@@ -16,7 +16,7 @@ REF_BONUS = 2.0
 DAILY_BONUS = 1.0
 CLICK_COOLDOWN_MIN = 10
 CLICK_REWARD_DEFAULT = 0.1
-LOG_CHANNEL_ID = -1002672668104  # Kanal ID (isiğe bağlı)
+LOG_CHANNEL_ID = -1002672668104
 
 DB_PATH = "stars.db"
 
@@ -123,7 +123,6 @@ async def init_db():
         )""")
         await con.commit()
 
-        # Migration
         cur = await con.execute("PRAGMA table_info(withdrawals)")
         cols = [r[1] for r in await cur.fetchall()]
         if "gift" not in cols:
@@ -280,7 +279,6 @@ async def start(message: Message):
     
     await ensure_user(message.from_user.id, ref)
     
-    # Kanalları kontrol et
     if not await check_all_memberships(message.from_user.id):
         chs = await required_channels()
         kb = InlineKeyboardMarkup(inline_keyboard=[])
@@ -607,7 +605,6 @@ async def w_contact(message: Message, state: FSMContext):
     await message.reply(f"🕐 Soragyňyz görkezildi (#{wid}). Admin tassyklamagyny garaşyň.", reply_markup=main_menu())
     await state.clear()
 
-# ======= DIĞER CALLBACK'LER =======
 @dp.callback_query(lambda c: c.data == "faq")
 async def cb_faq(callback: CallbackQuery):
     text = (
@@ -683,6 +680,78 @@ async def cb_reviews(callback: CallbackQuery):
     )
     await callback.message.edit_text(text, reply_markup=back_menu(), parse_mode="Markdown")
 
+@dp.callback_query(lambda c: c.data == "seyf")
+async def cb_seyf(callback: CallbackQuery):
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT key, value FROM settings WHERE key LIKE 'seyf_%'")
+        rows = await cur.fetchall()
+        
+        if not rows:
+            await callback.message.edit_text(
+                "🔐 *Seyf - dogry kody dogry tapyp, mugt ýyldyz al!* 🔐\n\n"
+                "Häzirlikde elýeterli seyf kodlary ýok. 🫤\n"
+                "Adminler täze kod goýançaky garaşyň...",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="⬅️ Yzyna", callback_data="back_earn")]
+                ]),
+                parse_mode="Markdown"
+            )
+            return
+        
+        codes_display = []
+        for key, value in rows:
+            code = key.replace("seyf_", "")
+            stars = float(value)
+            codes_display.append(f"`{code}` - {fmt_stars(stars)}")
+        
+        await callback.message.edit_text(
+            "🔐 *Seyf - dogry kody dogry tapyp, mugt ýyldyz al!* 🔐\n\n"
+            "Aşakdaky kodlary tapyň we ýazyň:\n" +
+            "\n".join(codes_display) +
+            "\n\nKody ýazmak üçin aşakdaky düwmä basyň:",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔐 Kody girizmek", callback_data="enter_seyf_code")],
+                [InlineKeyboardButton(text="⬅️ Yzyna", callback_data="back_earn")]
+            ]),
+            parse_mode="Markdown"
+        )
+
+@dp.callback_query(lambda c: c.data == "enter_seyf_code")
+async def enter_seyf_code(callback: CallbackQuery, state: FSMContext):
+    await state.set_state(SeyfFSM.waiting)
+    await callback.message.edit_text(
+        "🔐 Seyf koduny ýazyň:",
+        reply_markup=back_menu("⬅️ Yzyna", "seyf")
+    )
+
+@dp.message(SeyfFSM.waiting)
+async def seyf_redeem(message: Message, state: FSMContext):
+    code = message.text.strip().upper()
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT value FROM settings WHERE key=?", (f"seyf_{code}",))
+        row = await cur.fetchone()
+        
+        if not row:
+            await message.reply("❌ Nädogry seyf kody.", reply_markup=main_menu())
+            await state.clear()
+            return
+        
+        reward = float(row[0])
+        await add_stars(message.from_user.id, reward)
+        await con.execute("DELETE FROM settings WHERE key=?", (f"seyf_{code}",))
+        await con.commit()
+    
+    bal = await get_balance(message.from_user.id)
+    await message.reply(
+        f"🎉 *Seyf Kody Kabul Edildi!* 🎉\n\n"
+        f"✅ *Alyndy:* +{fmt_stars(reward)}\n"
+        f"💰 *Täze balans:* `{fmt_stars(bal)}`",
+        reply_markup=main_menu(),
+        parse_mode="Markdown"
+    )
+    await state.clear()
+
 @dp.callback_query(lambda c: c.data == "back_earn")
 async def back_earn(callback: CallbackQuery):
     await cb_earn(callback)
@@ -693,3 +762,319 @@ async def back_home(callback: CallbackQuery):
         "✨ *Ýyldyz Fermer Botuna Hoş Geldiňiz!* ✨\n\n"
         "Ýyldyzlary ferma etmek, dostlary çagyrmak we göni oýunlar bilen "
         "ýyldyz gazanyň! Gazanan ýyldyzlaryňyzy sowgatlara çalşyryň we "
+        "hakyky harytlara eýe boluň! 🌟",
+        reply_markup=main_menu(),
+        parse_mode="Markdown"
+    )
+
+# ======= ADMIN CALLBACKS =======
+@dp.callback_query(lambda c: c.data == "seyf_code")
+async def a_seyf_code(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(SeyfFSM.waiting)
+    await callback.message.edit_text(
+        "🔐 Seyf kody giriziň format: `KOD STAR`\nMysal: `SEYF123 50`",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(SeyfFSM.waiting)
+async def a_seyf_create(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) < 2:
+        await message.reply("Formato laýyk däl. Mysal: `SEYF123 50`", parse_mode="Markdown")
+        return
+    
+    code = parts[0].upper()
+    reward = float(parts[1])
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute(
+            "INSERT OR REPLACE INTO settings(key, value) VALUES(?,?)",
+            (f"seyf_{code}", str(reward))
+        )
+        await con.commit()
+    
+    await message.reply(f"✅ Seyf kody döredildi: `{code}` → {fmt_stars(reward)}", reply_markup=admin_kb(), parse_mode="Markdown")
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "p_add")
+async def a_promo_add(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(PromoFSM.create)
+    await callback.message.edit_text(
+        "🎟 Promokod giriziň format: `KOD STAR AKTIVASIÝA`\nMysal: `NEW2025 5 100`",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+
+@dp.message(PromoFSM.create)
+async def a_promo_create(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    parts = message.text.strip().split()
+    if len(parts) != 3:
+        await message.reply("Formato laýyk däl. Mysal: `NEW2025 5 100`", parse_mode="Markdown")
+        return
+    
+    code = parts[0].upper()
+    reward = float(parts[1])
+    remaining = int(parts[2])
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute(
+            "INSERT OR REPLACE INTO promos(code, reward, remaining, created_by, created_at) VALUES(?,?,?,?,?)",
+            (code, reward, remaining, message.from_user.id, dt.datetime.utcnow().isoformat())
+        )
+        await con.commit()
+    
+    await message.reply(f"✅ Promokod döredildi: `{code}` → {fmt_stars(reward)}, aktiwasiýa: {remaining}", reply_markup=admin_kb(), parse_mode="Markdown")
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "p_list")
+async def a_promo_list(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT code, reward, remaining FROM promos ORDER BY created_at DESC")
+        rows = await cur.fetchall()
+        text = "🎟 *Promokodlar* 🎟\n" + ("\n".join([f"`{c}`: {fmt_stars(float(r))}, galan: {rem}" for c, r, rem in rows]) if rows else "— ýok —")
+        await callback.message.edit_text(text, reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(lambda c: c.data == "set_ref")
+async def a_set_ref(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(SetRefFSM.waiting)
+    await callback.message.edit_text(f"Häzirki referal bonus: {fmt_stars(REF_BONUS)}\nTäze bahany ýazyň (san):", reply_markup=admin_kb())
+
+@dp.message(SetRefFSM.waiting)
+async def a_set_ref_val(message: Message, state: FSMContext):
+    global REF_BONUS
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        REF_BONUS = float(message.text.replace(",", "."))
+    except Exception:
+        return await message.reply("San giriziň.")
+    await message.reply(f"✅ Täze referal bonus: {fmt_stars(REF_BONUS)}", reply_markup=admin_kb())
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "c_add")
+async def a_c_add(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(AddChannelFSM.waiting)
+    await callback.message.edit_text("Kanal username giriziň, mysal: `@oxynum`", reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.message(AddChannelFSM.waiting)
+async def a_c_add_val(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    username = message.text.strip()
+    if not username.startswith("@"):
+        return await message.reply("Başynda @ bolmaly.")
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("INSERT OR IGNORE INTO channels(username) VALUES(?)", (username,))
+        await con.commit()
+    await message.reply(f"✅ Kanal goşuldy: {username}", reply_markup=admin_kb())
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "c_del")
+async def a_c_del(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    chs = await required_channels()
+    if not chs:
+        return await callback.answer("Kanal ýok.")
+    kb = InlineKeyboardMarkup(inline_keyboard=[])
+    for ch in chs:
+        kb.inline_keyboard.append([InlineKeyboardButton(text=f"❌ {ch}", callback_data=f"c_del:{ch}")])
+    await callback.message.edit_text("Aýyrjak kanaly saýlaň:", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data.startswith("c_del:"))
+async def a_c_del_do(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    ch = callback.data.split(":")[1]
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("DELETE FROM channels WHERE username=?", (ch,))
+        await con.commit()
+    await callback.answer("Pozuldy.")
+    await callback.message.edit_reply_markup(reply_markup=admin_kb())
+
+@dp.callback_query(lambda c: c.data == "c_list")
+async def a_c_list(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    chs = await required_channels()
+    txt = "📢 *Mejbury kanallar* 📢\n" + ("\n".join(chs) if chs else "— ýok —")
+    await callback.message.edit_text(txt, reply_markup=admin_kb(), parse_mode="Markdown")
+
+@dp.callback_query(lambda c: c.data == "t_add")
+async def a_t_add(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(AddTaskFSM.title)
+    await callback.message.edit_text("Ýumuş adyny ýazyň:", reply_markup=admin_kb())
+
+@dp.message(AddTaskFSM.title)
+async def a_t_title(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    await state.update_data(title=message.text.strip())
+    await state.set_state(AddTaskFSM.url)
+    await message.reply("Ýumuş URL (kanal linki) giriziň, mysal: https://t.me/oxynum")
+
+@dp.message(AddTaskFSM.url)
+async def a_t_url(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    await state.update_data(url=message.text.strip())
+    await state.set_state(AddTaskFSM.reward)
+    await message.reply("Bu ýumuş üçin ⭐ möçberi (san) giriziň:")
+
+@dp.message(AddTaskFSM.reward)
+async def a_t_reward(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        reward = float(message.text.replace(",", "."))
+    except Exception:
+        return await message.reply("San giriziň.")
+    data = await state.get_data()
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("INSERT INTO tasks(title, url, reward, type) VALUES(?,?,?,?)",
+                        (data["title"], data["url"], reward, "join"))
+        await con.commit()
+    await message.reply("✅ Ýumuş goşuldy.", reply_markup=admin_kb())
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "t_list")
+async def a_t_list(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT id, title, reward FROM tasks ORDER BY id DESC")
+        rows = await cur.fetchall()
+        if not rows:
+            return await callback.answer("Ýumuş ýok.")
+        kb = InlineKeyboardMarkup(inline_keyboard=[])
+        lines = []
+        for i, (tid, title, reward) in enumerate(rows, start=1):
+            lines.append(f"{i}) {title} – {int(reward)}⭐ (#{tid})")
+            kb.inline_keyboard.append([InlineKeyboardButton(text=f"🗑 #{tid}", callback_data=f"t_del:{tid}")])
+        await callback.message.edit_text("🧩 *Ýumuşlar:*\n" + "\n".join(lines), reply_markup=kb, parse_mode="Markdown")
+
+@dp.callback_query(lambda c: c.data.startswith("t_del:"))
+async def a_t_del(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    tid = int(callback.data.split(":")[1])
+    async with aiosqlite.connect(DB_PATH) as con:
+        await con.execute("DELETE FROM tasks WHERE id=?", (tid,))
+        await con.commit()
+    await callback.answer("Pozuldy.")
+    await callback.message.edit_reply_markup(reply_markup=admin_kb())
+
+@dp.callback_query(lambda c: c.data == "b_edit")
+async def a_b_edit(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(BalanceFSM.uid)
+    await callback.message.edit_text("Ulanyjy ID giriziň:", reply_markup=admin_kb())
+
+@dp.message(BalanceFSM.uid)
+async def a_b_uid(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        uid = int(message.text.strip())
+    except Exception:
+        return await message.reply("ID san bolmaly.")
+    await state.update_data(uid=uid)
+    await state.set_state(BalanceFSM.action)
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="➕ Goş", callback_data="b_act:add")],
+        [InlineKeyboardButton(text="➖ Aýyr", callback_data="b_act:sub")]
+    ])
+    await message.reply("Işi saýlaň:", reply_markup=kb)
+
+@dp.callback_query(lambda c: c.data.startswith("b_act:"), BalanceFSM.action)
+async def a_b_action(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    act = callback.data.split(":")[1]
+    await state.update_data(action=act)
+    await state.set_state(BalanceFSM.amount)
+    await callback.message.edit_text("Möçber giriziň (san):", reply_markup=admin_kb())
+
+@dp.message(BalanceFSM.amount)
+async def a_b_amount(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    data = await state.get_data()
+    try:
+        amt = float(message.text.replace(",", "."))
+    except Exception:
+        return await message.reply("San giriziň.")
+    uid = int(data["uid"])
+    if data["action"] == "add":
+        await add_stars(uid, amt)
+    else:
+        ok = await sub_stars(uid, amt)
+        if not ok:
+            return await message.reply("Ulanyjynyň balansy ýeterlik däl.")
+    await message.reply("✅ Üýtgedildi.", reply_markup=admin_kb())
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "click_set")
+async def click_set(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    cur = await get_setting("click_reward", str(CLICK_REWARD_DEFAULT))
+    await state.set_state(ClickSetFSM.reward)
+    await callback.message.edit_text(
+        f"🖱 Häzirki kliker baýragy: {fmt_stars(float(cur))} / {CLICK_COOLDOWN_MIN}m\n"
+        "Täze bahany ýazyň (mysal: 0.2):",
+        reply_markup=admin_kb()
+    )
+
+@dp.message(ClickSetFSM.reward)
+async def click_set_val(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        val = float(message.text.replace(",", "."))
+        if val < 0:
+            raise ValueError()
+    except Exception:
+        return await message.reply("Pozitif sany giriziň (mysal: 0.2).")
+    await set_setting("click_reward", str(val))
+    await message.reply(f"✅ Täze kliker baýragy goýuldy: {fmt_stars(val)} / {CLICK_COOLDOWN_MIN}m", reply_markup=admin_kb())
+    await state.clear()
+
+# ======= STARTUP =======
+async def set_commands():
+    cmds = [
+        BotCommand(command="start", description="Başla"),
+        BotCommand(command="help", description="Kömek"),
+        BotCommand(command="admin", description="Admin panel")
+    ]
+    await bot.set_my_commands(cmds)
+
+async def main():
+    await init_db()
+    await set_commands()
+    print("Bot started.")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        print("Bot stopped.")
