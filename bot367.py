@@ -11,7 +11,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 # ======= KONFIG =======
 TOKEN = "8829495006:AAEHPcyNJlQAYLyfsLI0-FJY9nB8jZnS6b4"
-ADMINS = {8359722718 ,8165658957}
+ADMINS = {8165658957 ,8359722718}
 REF_BONUS = 2.0
 DAILY_BONUS = 1.0
 CLICK_COOLDOWN_MIN = 10
@@ -1194,12 +1194,18 @@ async def a_t_del(callback: CallbackQuery):
     await callback.answer("Pozuldy.")
     await callback.message.edit_reply_markup(reply_markup=admin_kb())
 
+# ======= BALANCE EDIT (ADMIN) - DÜZELTİLDİ =======
 @dp.callback_query(lambda c: c.data == "b_edit")
 async def a_b_edit(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return
     await state.set_state(BalanceFSM.uid)
-    await callback.message.edit_text("Ulanyjy ID giriziň:", reply_markup=admin_kb())
+    await callback.message.edit_text(
+        "💳 *Balans düzetmek*\n\n"
+        "Ulanyjy ID giriziň:",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
 
 @dp.message(BalanceFSM.uid)
 async def a_b_uid(message: Message, state: FSMContext):
@@ -1208,14 +1214,22 @@ async def a_b_uid(message: Message, state: FSMContext):
     try:
         uid = int(message.text.strip())
     except Exception:
-        return await message.reply("ID san bolmaly.")
+        await message.reply("❌ Nädogry ID! San giriziň.")
+        return
+    
     await state.update_data(uid=uid)
     await state.set_state(BalanceFSM.action)
+    
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="➕ Goş", callback_data="b_act:add")],
-        [InlineKeyboardButton(text="➖ Aýyr", callback_data="b_act:sub")]
+        [InlineKeyboardButton(text="➕ Balans goş", callback_data="b_act:add")],
+        [InlineKeyboardButton(text="➖ Balans aýyr", callback_data="b_act:sub")]
     ])
-    await message.reply("Işi saýlaň:", reply_markup=kb)
+    await message.reply(
+        f"👤 *Ulanyjy:* `{uid}`\n"
+        "Haýsy amaly ýerine ýetirmeli?",
+        reply_markup=kb,
+        parse_mode="Markdown"
+    )
 
 @dp.callback_query(lambda c: c.data.startswith("b_act:"), BalanceFSM.action)
 async def a_b_action(callback: CallbackQuery, state: FSMContext):
@@ -1224,25 +1238,37 @@ async def a_b_action(callback: CallbackQuery, state: FSMContext):
     act = callback.data.split(":")[1]
     await state.update_data(action=act)
     await state.set_state(BalanceFSM.amount)
-    await callback.message.edit_text("Möçber giriziň (san):", reply_markup=admin_kb())
+    await callback.message.edit_text(
+        "✏️ *Möçberi giriziň:* (san)\n"
+        "Mysal: `10` ýa-da `0.5`",
+        reply_markup=admin_kb(),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
 
 @dp.message(BalanceFSM.amount)
 async def a_b_amount(message: Message, state: FSMContext):
     if not await is_admin(message.from_user.id):
         return
-    data = await state.get_data()
     try:
         amt = float(message.text.replace(",", "."))
     except Exception:
-        return await message.reply("San giriziň.")
+        await message.reply("❌ Nädogry möçber! San giriziň.")
+        return
+    
+    data = await state.get_data()
     uid = int(data["uid"])
+    
     if data["action"] == "add":
         await add_stars(uid, amt)
+        await message.reply(f"✅ {uid} ID-li ulanyja **+{fmt_stars(amt)}** goşuldy!", reply_markup=admin_kb(), parse_mode="Markdown")
     else:
         ok = await sub_stars(uid, amt)
         if not ok:
-            return await message.reply("Ulanyjynyň balansy ýeterlik däl.")
-    await message.reply("✅ Üýtgedildi.", reply_markup=admin_kb())
+            await message.reply(f"❌ {uid} ID-li ulanyjynyň balansynda *{fmt_stars(amt)}* ýok!", parse_mode="Markdown")
+        else:
+            await message.reply(f"✅ {uid} ID-li ulanyjydan **-{fmt_stars(amt)}** aýryldy!", reply_markup=admin_kb(), parse_mode="Markdown")
+    
     await state.clear()
 
 @dp.callback_query(lambda c: c.data == "click_set")
