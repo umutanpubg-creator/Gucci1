@@ -11,12 +11,12 @@ from aiogram.fsm.state import State, StatesGroup
 
 # ======= KONFIG =======
 TOKEN = "8829495006:AAEHPcyNJlQAYLyfsLI0-FJY9nB8jZnS6b4"
-ADMINS = {8359722718}
+ADMINS = {8359722718 ,8165658957}
 REF_BONUS = 2.0
 DAILY_BONUS = 1.0
 CLICK_COOLDOWN_MIN = 10
 CLICK_REWARD_DEFAULT = 0.1
-LOG_CHANNEL_ID = -1002672668104
+LOG_CHANNEL_ID = -1002672668104  # Kanal ID (isteğe bağlı, yoksa 0 yapın)
 
 DB_PATH = "stars.db"
 
@@ -56,19 +56,33 @@ bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
 # ======= GIFT OPTIONS =======
-GIFT_OPTIONS = [
-    ("bear", "🧸 15⭐", 15),
-    ("heartbox", "💝 15⭐", 15),
-    ("gift25", "🎁 25⭐", 25),
-    ("rose", "🌹 25⭐", 25),
-    ("cake", "🎂 50⭐", 50),
-    ("bouquet", "💐 50⭐", 50),
-    ("rocket", "🚀 50⭐", 50),
-    ("champ", "🍾 50⭐", 50),
-    ("cup", "🏆 100⭐", 100),
-    ("ring", "💍 100⭐", 100),
-    ("gem", "💎 100⭐", 100),
-]
+GIFT_OPTIONS = {
+    "bear": "🧸 Ayıcık",
+    "heartbox": "💝 Kalpli Kutu",
+    "gift25": "🎁 Hediye Kutusu",
+    "rose": "🌹 Gül",
+    "cake": "🎂 Pasta",
+    "bouquet": "💐 Buket",
+    "rocket": "🚀 Roket",
+    "champ": "🍾 Şampanya",
+    "cup": "🏆 Kupa",
+    "ring": "💍 Yüzük",
+    "gem": "💎 Elmas"
+}
+
+GIFT_PRICES = {
+    "bear": 15,
+    "heartbox": 15,
+    "gift25": 25,
+    "rose": 25,
+    "cake": 50,
+    "bouquet": 50,
+    "rocket": 50,
+    "champ": 50,
+    "cup": 100,
+    "ring": 100,
+    "gem": 100
+}
 
 # ======= HELPERS =======
 def fmt_stars(x: float) -> str:
@@ -304,6 +318,7 @@ async def start(message: Message):
 @dp.message(Command("admin"))
 async def admin_entry(message: Message):
     if not await is_admin(message.from_user.id):
+        await message.answer("⛔ Bu komut sadece adminler içindir!")
         return
     await message.answer("🛠 Admin panel", reply_markup=admin_kb())
 
@@ -523,8 +538,9 @@ async def cb_task_verify(callback: CallbackQuery):
 @dp.callback_query(lambda c: c.data == "exchange")
 async def cb_exchange(callback: CallbackQuery, state: FSMContext):
     kb = InlineKeyboardMarkup(inline_keyboard=[])
-    for code, text, cost in GIFT_OPTIONS:
-        kb.inline_keyboard.append([InlineKeyboardButton(text=text, callback_data=f"gift:{code}")])
+    for code, name in GIFT_OPTIONS.items():
+        price = GIFT_PRICES[code]
+        kb.inline_keyboard.append([InlineKeyboardButton(text=f"{name} ({int(price)}⭐)", callback_data=f"gift:{code}")])
     kb.inline_keyboard.append([InlineKeyboardButton(text="⬅️ Yzyna", callback_data="back_home")])
     
     bal = await get_balance(callback.from_user.id)
@@ -540,13 +556,16 @@ async def cb_exchange(callback: CallbackQuery, state: FSMContext):
 @dp.callback_query(lambda c: c.data.startswith("gift:"), WithdrawFSM.choose)
 async def w_choose_gift(callback: CallbackQuery, state: FSMContext):
     code = callback.data.split(":")[1]
-    found = next((opt for opt in GIFT_OPTIONS if opt[0] == code), None)
-    if not found:
+    if code not in GIFT_OPTIONS:
         return await callback.answer("Tapylmady.")
-    _, label, cost = found
+    
+    label = GIFT_OPTIONS[code]
+    cost = GIFT_PRICES[code]
+    
     bal = await get_balance(callback.from_user.id)
     if bal < cost:
         return await callback.answer(f"Balans ýeterlik däl. Gerek {int(cost)}⭐", show_alert=True)
+    
     await state.update_data(gift_code=code, gift_label=label, amount=cost)
     await state.set_state(WithdrawFSM.contact)
     await callback.message.edit_text(
@@ -565,8 +584,10 @@ async def w_contact(message: Message, state: FSMContext):
         await message.reply("Balans ýeterlik däl.", reply_markup=main_menu())
         await state.clear()
         return
+    
     gift_label = data.get("gift_label", "—")
     gift_code = data.get("gift_code", "")
+    
     async with aiosqlite.connect(DB_PATH) as con:
         await con.execute(
             "INSERT INTO withdrawals(user_id, amount, contact, status, created_at, gift) VALUES(?,?,?,?,?,?)",
@@ -594,16 +615,138 @@ async def w_contact(message: Message, state: FSMContext):
     
     if LOG_CHANNEL_ID:
         try:
-            await bot.send_message(LOG_CHANNEL_ID, text, reply_markup=kb)
+            await bot.send_message(LOG_CHANNEL_ID, text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
+    
     for aid in await admins_all():
         try:
-            await bot.send_message(aid, text, reply_markup=kb)
+            await bot.send_message(aid, text, reply_markup=kb, parse_mode="HTML")
         except Exception:
             pass
+    
     await message.reply(f"🕐 Soragyňyz görkezildi (#{wid}). Admin tassyklamagyny garaşyň.", reply_markup=main_menu())
     await state.clear()
+
+# ======= WITHDRAWAL APPROVAL (ADMIN) =======
+@dp.callback_query(lambda c: c.data.startswith("w_ok:"))
+async def approve_withdrawal(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("⛔ Bu işlemi yapmaya yetkiniz yok!", show_alert=True)
+        return
+    
+    wid = int(callback.data.split(":")[1])
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT user_id, amount, gift FROM withdrawals WHERE id=? AND status='pending'", (wid,))
+        row = await cur.fetchone()
+        
+        if not row:
+            await callback.answer("❌ Bu çekim zaten işleme alınmış veya bulunamadı!", show_alert=True)
+            await callback.message.edit_text("❌ Bu çekim zaten işleme alınmış veya bulunamadı!")
+            return
+        
+        user_id, amount, gift_code = row
+        await con.execute("UPDATE withdrawals SET status='approved' WHERE id=?", (wid,))
+        await con.commit()
+    
+    try:
+        gift_name = GIFT_OPTIONS.get(gift_code, "Hediye")
+        await bot.send_message(
+            user_id,
+            f"🎉 *Tebrikler!* 🎉\n\n"
+            f"✅ *{gift_name}* hediyeniz onaylandı!\n"
+            f"📦 Hediye en kısa sürede size iletilecektir.\n\n"
+            f"💬 Sorularınız için admin ile iletişime geçin.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Kullanıcıya mesaj gönderilemedi: {e}")
+    
+    await callback.message.edit_text(
+        f"✅ #{wid} numaralı çekim **onaylandı**!\n"
+        f"👤 Kullanıcıya bildirim gönderildi.",
+        parse_mode="Markdown"
+    )
+    await callback.answer("✅ Çekim onaylandı!")
+
+@dp.callback_query(lambda c: c.data.startswith("w_no:"))
+async def reject_withdrawal(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        await callback.answer("⛔ Bu işlemi yapmaya yetkiniz yok!", show_alert=True)
+        return
+    
+    wid = int(callback.data.split(":")[1])
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute("SELECT user_id, amount FROM withdrawals WHERE id=? AND status='pending'", (wid,))
+        row = await cur.fetchone()
+        
+        if not row:
+            await callback.answer("❌ Bu çekim zaten işleme alınmış veya bulunamadı!", show_alert=True)
+            await callback.message.edit_text("❌ Bu çekim zaten işleme alınmış veya bulunamadı!")
+            return
+        
+        user_id, amount = row
+        await con.execute("UPDATE withdrawals SET status='rejected' WHERE id=?", (wid,))
+        await con.commit()
+    
+    await add_stars(user_id, amount)
+    
+    try:
+        await bot.send_message(
+            user_id,
+            f"❌ *Üzgünüz!* ❌\n\n"
+            f"⚠️ *{fmt_stars(amount)}* değerindeki hediye talebiniz **reddedildi**.\n"
+            f"💫 Yıldızlarınız hesabınıza iade edildi.\n\n"
+            f"💬 Sebebini öğrenmek için admin ile iletişime geçin.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        print(f"Kullanıcıya mesaj gönderilemedi: {e}")
+    
+    await callback.message.edit_text(
+        f"❌ #{wid} numaralı çekim **reddedildi**!\n"
+        f"💫 Yıldızlar kullanıcıya iade edildi.",
+        parse_mode="Markdown"
+    )
+    await callback.answer("❌ Çekim reddedildi!")
+
+# ======= WITHDRAWAL LIST (ADMIN) =======
+@dp.callback_query(lambda c: c.data == "w_list")
+async def list_withdrawals(callback: CallbackQuery):
+    if not await is_admin(callback.from_user.id):
+        return
+    
+    async with aiosqlite.connect(DB_PATH) as con:
+        cur = await con.execute(
+            "SELECT id, user_id, amount, contact, status, created_at, gift FROM withdrawals ORDER BY id DESC LIMIT 20"
+        )
+        rows = await cur.fetchall()
+        
+        if not rows:
+            await callback.message.edit_text(
+                "💼 *Çykarma sanaw* 💼\n\n"
+                "📭 Henüz hiç çekim talebi yok.",
+                reply_markup=admin_kb(),
+                parse_mode="Markdown"
+            )
+            return
+        
+        text = "💼 *Çykarma sanaw* 💼\n\n"
+        for wid, uid, amount, contact, status, created_at, gift in rows:
+            status_emoji = "✅" if status == "approved" else "❌" if status == "rejected" else "⏳"
+            gift_name = GIFT_OPTIONS.get(gift, "Bilinmeyen")
+            text += f"#{wid} | {status_emoji} {status.upper()}\n"
+            text += f"👤 ID: {uid} | 🎁 {gift_name}\n"
+            text += f"💰 {fmt_stars(amount)} | 📨 {contact[:20]}\n"
+            text += f"⏱ {created_at[:16]}\n\n"
+        
+        await callback.message.edit_text(
+            text,
+            reply_markup=admin_kb(),
+            parse_mode="Markdown"
+        )
 
 @dp.callback_query(lambda c: c.data == "faq")
 async def cb_faq(callback: CallbackQuery):
@@ -611,7 +754,7 @@ async def cb_faq(callback: CallbackQuery):
         "📚 *Gollanma | FAQ* 📚\n\n"
         "❓ *Nädip ýyldyz gazanmaly?*\n"
         "- Kliker bilen her 10 minutda 0.1⭐\n"
-        "- Dostlary çagyrmak bilen her biri üçin 4⭐\n"
+        "- Dostlary çagyrmak bilen her biri üçin 2⭐\n"
         "- Gündelik bonus 1⭐\n"
         "- Ýumuşlar we promokodlar\n\n"
         "❓ *Nädip çalşyrmaly?*\n"
@@ -768,6 +911,49 @@ async def back_home(callback: CallbackQuery):
     )
 
 # ======= ADMIN CALLBACKS =======
+@dp.callback_query(lambda c: c.data == "a_add")
+async def a_add_admin(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(BalanceFSM.uid)  # Reuse state
+    await callback.message.edit_text("👑 Admin olarak eklemek istediğiniz kullanıcının ID'sini girin:", reply_markup=admin_kb())
+
+@dp.message(BalanceFSM.uid)
+async def a_add_admin_val(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        uid = int(message.text.strip())
+    except Exception:
+        return await message.reply("❌ Geçersiz ID! Lütfen sayı girin.")
+    
+    await add_admin(uid)
+    await message.reply(f"✅ {uid} ID'li kullanıcı admin olarak eklendi!", reply_markup=admin_kb())
+    await state.clear()
+
+@dp.callback_query(lambda c: c.data == "a_del")
+async def a_del_admin(callback: CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id):
+        return
+    await state.set_state(BalanceFSM.amount)  # Reuse state
+    await callback.message.edit_text("🚫 Admin olarak çıkarmak istediğiniz kullanıcının ID'sini girin:", reply_markup=admin_kb())
+
+@dp.message(BalanceFSM.amount)
+async def a_del_admin_val(message: Message, state: FSMContext):
+    if not await is_admin(message.from_user.id):
+        return
+    try:
+        uid = int(message.text.strip())
+    except Exception:
+        return await message.reply("❌ Geçersiz ID! Lütfen sayı girin.")
+    
+    if uid == 7279061074:
+        return await message.reply("❌ Ana admin çıkarılamaz!")
+    
+    await remove_admin(uid)
+    await message.reply(f"✅ {uid} ID'li kullanıcı admin olarak çıkarıldı!", reply_markup=admin_kb())
+    await state.clear()
+
 @dp.callback_query(lambda c: c.data == "seyf_code")
 async def a_seyf_code(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
@@ -869,7 +1055,7 @@ async def a_c_add(callback: CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id):
         return
     await state.set_state(AddChannelFSM.waiting)
-    await callback.message.edit_text("Kanal username giriziň, mysal: `@oxynum`", reply_markup=admin_kb(), parse_mode="Markdown")
+    await callback.message.edit_text("Kanal username giriziň, mysal: `@kanal`", reply_markup=admin_kb(), parse_mode="Markdown")
 
 @dp.message(AddChannelFSM.waiting)
 async def a_c_add_val(message: Message, state: FSMContext):
@@ -928,7 +1114,7 @@ async def a_t_title(message: Message, state: FSMContext):
         return
     await state.update_data(title=message.text.strip())
     await state.set_state(AddTaskFSM.url)
-    await message.reply("Ýumuş URL (kanal linki) giriziň, mysal: https://t.me/oxynum")
+    await message.reply("Ýumuş URL (kanal linki) giriziň, mysal: https://t.me/kanal")
 
 @dp.message(AddTaskFSM.url)
 async def a_t_url(message: Message, state: FSMContext):
@@ -1070,11 +1256,11 @@ async def set_commands():
 async def main():
     await init_db()
     await set_commands()
-    print("Bot started.")
+    print("🤖 Bot started successfully!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
     try:
         asyncio.run(main())
     except (KeyboardInterrupt, SystemExit):
-        print("Bot stopped.")
+        print("🛑 Bot stopped.")
